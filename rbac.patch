@@ -1,0 +1,120 @@
+From 61eaf5788a3ab120f4dfb4963b3cc21280ff3976 Mon Sep 17 00:00:00 2001
+From: MiaoHao-oops <haomiao19@mails.ucas.ac.cn>
+Date: Mon, 25 Mar 2024 20:06:08 +0800
+Subject: [PATCH] rbac: add rbac framework
+
+authored by: Miao Hao
+---
+ security/Kconfig       | 11 ++++++-----
+ security/Makefile      |  2 ++
+ security/rbac/Kconfig  |  7 +++++++
+ security/rbac/Makefile |  2 ++
+ security/rbac/lsm.c    | 23 +++++++++++++++++++++++
+ 5 files changed, 40 insertions(+), 5 deletions(-)
+ create mode 100644 security/rbac/Kconfig
+ create mode 100644 security/rbac/Makefile
+ create mode 100644 security/rbac/lsm.c
+
+diff --git a/security/Kconfig b/security/Kconfig
+index 0ced7fd33..74ca46ff2 100644
+--- a/security/Kconfig
++++ b/security/Kconfig
+@@ -239,6 +239,7 @@ source "security/yama/Kconfig"
+ source "security/safesetid/Kconfig"
+ source "security/lockdown/Kconfig"
+ source "security/landlock/Kconfig"
++source "security/rbac/Kconfig"
+ 
+ source "security/integrity/Kconfig"
+ 
+@@ -278,11 +279,11 @@ endchoice
+ 
+ config LSM
+ 	string "Ordered list of enabled LSMs"
+-	default "landlock,lockdown,yama,loadpin,safesetid,integrity,smack,selinux,tomoyo,apparmor,bpf" if DEFAULT_SECURITY_SMACK
+-	default "landlock,lockdown,yama,loadpin,safesetid,integrity,apparmor,selinux,smack,tomoyo,bpf" if DEFAULT_SECURITY_APPARMOR
+-	default "landlock,lockdown,yama,loadpin,safesetid,integrity,tomoyo,bpf" if DEFAULT_SECURITY_TOMOYO
+-	default "landlock,lockdown,yama,loadpin,safesetid,integrity,bpf" if DEFAULT_SECURITY_DAC
+-	default "landlock,lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf"
++	default "rbac,landlock,lockdown,yama,loadpin,safesetid,integrity,smack,selinux,tomoyo,apparmor,bpf" if DEFAULT_SECURITY_SMACK
++	default "rbac,landlock,lockdown,yama,loadpin,safesetid,integrity,apparmor,selinux,smack,tomoyo,bpf" if DEFAULT_SECURITY_APPARMOR
++	default "rbac,landlock,lockdown,yama,loadpin,safesetid,integrity,tomoyo,bpf" if DEFAULT_SECURITY_TOMOYO
++	default "rbac,landlock,lockdown,yama,loadpin,safesetid,integrity,bpf" if DEFAULT_SECURITY_DAC
++	default "rbac,landlock,lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf"
+ 	help
+ 	  A comma-separated list of LSMs, in initialization order.
+ 	  Any LSMs left off this list will be ignored. This can be
+diff --git a/security/Makefile b/security/Makefile
+index 47e432900..abe17205d 100644
+--- a/security/Makefile
++++ b/security/Makefile
+@@ -14,6 +14,7 @@ subdir-$(CONFIG_SECURITY_SAFESETID)    += safesetid
+ subdir-$(CONFIG_SECURITY_LOCKDOWN_LSM)	+= lockdown
+ subdir-$(CONFIG_BPF_LSM)		+= bpf
+ subdir-$(CONFIG_SECURITY_LANDLOCK)	+= landlock
++subdir-$(CONFIG_SECURITY_RBAC)		+= rbac
+ 
+ # always enable default capabilities
+ obj-y					+= commoncap.o
+@@ -34,6 +35,7 @@ obj-$(CONFIG_SECURITY_LOCKDOWN_LSM)	+= lockdown/
+ obj-$(CONFIG_CGROUPS)			+= device_cgroup.o
+ obj-$(CONFIG_BPF_LSM)			+= bpf/
+ obj-$(CONFIG_SECURITY_LANDLOCK)		+= landlock/
++obj-$(CONFIG_SECURITY_RBAC)		+= rbac/
+ 
+ # Object integrity file lists
+ subdir-$(CONFIG_INTEGRITY)		+= integrity
+diff --git a/security/rbac/Kconfig b/security/rbac/Kconfig
+new file mode 100644
+index 000000000..bf3c5b8a7
+--- /dev/null
++++ b/security/rbac/Kconfig
+@@ -0,0 +1,7 @@
++# SPDX-License-Identifier: GPL-2.0-only
++config SECURITY_RBAC
++	bool "RBAC support"
++	depends on SECURITY
++	default n
++	help
++	  This selects RBAC
+diff --git a/security/rbac/Makefile b/security/rbac/Makefile
+new file mode 100644
+index 000000000..6dc23d22e
+--- /dev/null
++++ b/security/rbac/Makefile
+@@ -0,0 +1,2 @@
++# SPDX-License-Identifier: GPL-2.0-only
++obj-$(CONFIG_SECURITY_RBAC) := lsm.o
+diff --git a/security/rbac/lsm.c b/security/rbac/lsm.c
+new file mode 100644
+index 000000000..f57dd8bcd
+--- /dev/null
++++ b/security/rbac/lsm.c
+@@ -0,0 +1,23 @@
++#include <linux/lsm_hooks.h>
++ 
++static int example_inode_permission(struct inode *inode, int mask)
++{
++	// printk("hello, rbac!");
++	return 0;
++}
++ 
++static struct security_hook_list rbac_hooks[] = {
++	LSM_HOOK_INIT(inode_permission, example_inode_permission),
++};
++
++static int __init rbac_init(void)
++{
++	pr_info("rbac: becoming mindful.\n");
++	security_add_hooks(rbac_hooks, ARRAY_SIZE(rbac_hooks), "rbac");
++	return 0;
++}
++
++DEFINE_LSM(rbac) = {
++	.name = "rbac",
++	.init = rbac_init,
++};
+\ No newline at end of file
+-- 
+2.34.1
+
