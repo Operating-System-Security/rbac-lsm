@@ -6,7 +6,6 @@
 
 #define ROLE_NAME_LEN	20
 #define ROLE_MAX_PERMS	20
-#define OBJ_PATH_LEN	40
 
 typedef enum {
 	ACC_ACCEPT,
@@ -18,7 +17,17 @@ typedef enum {
 	OP_WRITE,
 } operation_t;
 
-typedef char object_t[OBJ_PATH_LEN];
+static const char *acceptability_name[] = {
+	[ACC_ACCEPT] = "accept",
+	[ACC_DENY] = "deny",
+};
+
+static const char *operation_name[] = {
+	[OP_READ] = "read",
+	[OP_WRITE] = "write",
+};
+
+typedef char* object_t;
 
 struct rbac_user {
 	int			uid;
@@ -32,6 +41,7 @@ struct rbac_role {
 };
 
 struct rbac_permission {
+	int			id;
 	acceptablity_t		acc;
 	operation_t		op;
 	object_t		obj;
