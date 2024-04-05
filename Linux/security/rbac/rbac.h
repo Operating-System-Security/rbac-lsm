@@ -2,32 +2,24 @@
 #define _SECURITY_RBAC_RBAC_H
 
 #include <linux/list.h>
+#include <linux/refcount.h>
 #include <linux/types.h>
 
+#define RBAC_NAME "rbac"
 #define ROLE_NAME_LEN	20
 #define ROLE_MAX_PERMS	20
 
 typedef enum {
 	ACC_ACCEPT,
 	ACC_DENY,
-} acceptablity_t;
+} rbac_acc_t;
 
 typedef enum {
 	OP_READ,
 	OP_WRITE,
-} operation_t;
+} rbac_op_t;
 
-static const char *acceptability_name[] = {
-	[ACC_ACCEPT] = "accept",
-	[ACC_DENY] = "deny",
-};
-
-static const char *operation_name[] = {
-	[OP_READ] = "read",
-	[OP_WRITE] = "write",
-};
-
-typedef char* object_t;
+typedef char* rbac_obj_t;
 
 struct rbac_user {
 	int			uid;
@@ -36,16 +28,27 @@ struct rbac_user {
 
 struct rbac_role {
 	char			name[ROLE_NAME_LEN];
-	struct list_head	entry;
 	struct rbac_permission	*perms[ROLE_MAX_PERMS];
+	refcount_t		ref;
+	struct list_head	entry;
 };
 
 struct rbac_permission {
 	int			id;
-	acceptablity_t		acc;
-	operation_t		op;
-	object_t		obj;
+	rbac_acc_t		acc;
+	rbac_op_t		op;
+	rbac_obj_t		obj;
+	refcount_t		ref;
 	struct list_head	entry;
 };
+
+extern struct list_head rbac_roles;
+extern struct list_head rbac_perms;
+extern int rbac_enable;
+
+extern int rbac_add_role(char *name);
+extern int rbac_remove_role(char *name);
+extern int rbac_add_permission(char **args, char *delim);
+extern int rbac_remove_permission(char *idp, char *delim);
 
 #endif
