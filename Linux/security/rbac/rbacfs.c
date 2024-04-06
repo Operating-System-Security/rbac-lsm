@@ -4,6 +4,7 @@
  *
  * Copyright 2024 Miao Hao <haomiao19@mails.ucas.ac.cn>
  */
+#include "linux/namei.h"
 #include <asm-generic/errno-base.h>
 #include <linux/dcache.h>
 #include <linux/err.h>
@@ -96,11 +97,12 @@ static int rbac_role_op(int wr, char **args)
 
 static int rbac_perm_op(int wr, char **args)
 {
-	char *tokens[3], *accp, *opp, *objp;
-	int ret = 0, id;
+	char *tokens[3], *accp, *opp, *objp, *obj_path;
+	int ret = 0, id, obj_path_len;
 	rbac_acc_t acc = -1;
 	rbac_op_t op = -1;
 	rbac_obj_t obj = NULL;
+	struct path path;
 
 	switch(wr) {
 	case 0:
@@ -154,17 +156,28 @@ static int rbac_perm_op(int wr, char **args)
 		}
 
 		/* we accept no obj path input, it means "for all objects" */
-		if (objp == NULL || strlen(objp) == 0)
-			obj = NULL;
-		else {
-			obj = kzalloc(strlen(objp) + 1, GFP_KERNEL);
-			if (obj == NULL) {
-				ret = -ENOMEM;
-				goto out;
-			}
-			strcpy(obj, objp);
+		if (objp == NULL || strlen(objp) == 0) {
+			obj_path_len = 2;
+		} else {
+			obj_path_len = strlen(objp) + 1;
 		}
-		ret = rbac_add_permission(acc, op, obj);
+
+		obj_path = kzalloc(obj_path_len, GFP_KERNEL);
+		if (obj_path == NULL) {
+			ret = -ENOMEM;
+			goto out;
+		}
+		if (objp == NULL || strlen(objp) == 0) {
+			obj_path[0] = '/';
+			obj_path[1] = '\0';
+		} else
+			strcpy(obj_path, objp);
+
+		ret = kern_path(obj_path, LOOKUP_FOLLOW, &path);
+		if (ret)
+			goto out;
+		obj = d_inode(path.dentry);
+		ret = rbac_add_permission(acc, op, obj, obj_path);
 		break;
 	case 1:
 		if (rbac_get_nargs(args, 1, tokens) != 1) {

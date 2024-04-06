@@ -44,6 +44,7 @@ struct rbac_permission {
 	rbac_acc_t		acc;
 	rbac_op_t		op;
 	rbac_obj_t		obj;
+	char			*obj_path;
 	refcount_t		ref;
 	struct list_head	entry;
 };
@@ -56,7 +57,7 @@ static const char *operation_name[] = {
 	[OP_WRITE] = "write",
 };
 
-static struct rbac_user *rbac_get_user_by_uid (uid_t uid)
+static struct rbac_user *rbac_get_user_by_uid(uid_t uid)
 {
 	struct rbac_user *ret;
 	list_for_each_entry(ret, &rbac_users, entry) {
@@ -229,7 +230,7 @@ int rbac_get_roles_info(char *buf)
 	return 0;
 }
 
-int rbac_add_permission(rbac_acc_t acc, rbac_op_t op, rbac_obj_t obj)
+int rbac_add_permission(rbac_acc_t acc, rbac_op_t op, rbac_obj_t obj, char *obj_path)
 {
 	int ret = 0;
 	struct rbac_permission *new_perm;
@@ -244,6 +245,7 @@ int rbac_add_permission(rbac_acc_t acc, rbac_op_t op, rbac_obj_t obj)
 	new_perm->acc = acc;
 	new_perm->op = op;
 	new_perm->obj = obj;
+	new_perm->obj_path = obj_path;
 	refcount_set(&new_perm->ref, 1);
 
 	/* Finally add the new permission to the list */
@@ -270,6 +272,7 @@ int rbac_remove_permission(int id)
 
 	/* remove the selected permission from the list */
 	list_del(&perm->entry);
+	kfree(perm->obj_path);
 	kfree(perm);
 
 out:
@@ -284,7 +287,7 @@ int rbac_get_perms_info(char *buf)
 	list_for_each_entry(perm, &rbac_perms, entry) {
 		off += sprintf(buf + off, "[%d]: %s %s on %s\n",
 			       perm->id, acceptability_name[perm->acc],
-			       operation_name[perm->op], perm->obj ?: "all");
+			       operation_name[perm->op], perm->obj_path);
 	}
 
 	return 0;

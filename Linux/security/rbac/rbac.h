@@ -1,6 +1,7 @@
 #ifndef _SECURITY_RBAC_RBAC_H
 #define _SECURITY_RBAC_RBAC_H
 
+#include <linux/fs.h>
 #include <linux/list.h>
 #include <linux/refcount.h>
 #include <linux/types.h>
@@ -19,7 +20,7 @@ typedef enum {
 	OP_WRITE,
 } rbac_op_t;
 
-typedef char* rbac_obj_t;
+typedef struct inode *rbac_obj_t;
 
 extern struct list_head rbac_users;
 extern struct list_head rbac_roles;
@@ -32,7 +33,7 @@ extern int rbac_get_users_info(char *buf);
 extern int rbac_add_role(char *name);
 extern int rbac_remove_role(char *name);
 extern int rbac_get_roles_info(char *buf);
-extern int rbac_add_permission(rbac_acc_t acc, rbac_op_t op, rbac_obj_t obj);
+extern int rbac_add_permission(rbac_acc_t acc, rbac_op_t op, rbac_obj_t obj, char *obj_path);
 extern int rbac_remove_permission(int id);
 extern int rbac_get_perms_info(char *buf);
 
