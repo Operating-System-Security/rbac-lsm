@@ -42,14 +42,6 @@ struct rbac_file {
 	const umode_t			mode;
 };
 static struct dentry *rbac_dir = NULL;
-static const char *acceptability_name[] = {
-	[ACC_ACCEPT] = "accept",
-	[ACC_DENY] = "deny",
-};
-static const char *operation_name[] = {
-	[OP_READ] = "read",
-	[OP_WRITE] = "write",
-};
 
 static int rbac_role_op(int wr, char **args)
 {
@@ -209,8 +201,7 @@ static ssize_t rbac_role_read(struct file *file, char __user *buf,
 			      size_t size, loff_t *ppos)
 {
 	char* kbuf;
-	int off = 0, ret = 0, i;
-	struct rbac_role *role;
+	int ret = 0;
 
 	kbuf = kzalloc(1024, GFP_KERNEL);
 	if (kbuf == NULL) {
@@ -218,14 +209,7 @@ static ssize_t rbac_role_read(struct file *file, char __user *buf,
 		goto out;
 	}
 
-	list_for_each_entry(role, &rbac_roles, entry) {
-		off += sprintf(kbuf + off, "%s", role->name);
-		for (i = 0; i < ROLE_MAX_PERMS; i++) {
-			if (role->perms[i] != NULL)
-				off += sprintf(kbuf + off, "perm[%d]", i);
-		}
-		off += sprintf(kbuf + off, "\n");
-	}
+	rbac_get_roles_info(kbuf);
 	ret = simple_read_from_buffer(buf, size, ppos, kbuf, strlen(kbuf));
 	kfree(kbuf);
 
@@ -237,8 +221,7 @@ static ssize_t rbac_perm_read(struct file *file, char __user *buf,
 			      size_t size, loff_t *ppos)
 {
 	char* kbuf;
-	int off = 0, ret = 0;
-	struct rbac_permission *perm;
+	int ret = 0;
 
 	kbuf = kzalloc(1024, GFP_KERNEL);
 	if (kbuf == NULL) {
@@ -246,13 +229,42 @@ static ssize_t rbac_perm_read(struct file *file, char __user *buf,
 		goto out;
 	}
 
-	list_for_each_entry(perm, &rbac_perms, entry) {
-		off += sprintf(kbuf + off, "[%d]: %s %s on %s\n",
-			       perm->id, acceptability_name[perm->acc],
-			       operation_name[perm->op], perm->obj ?: "all");
-	}
+	rbac_get_perms_info(kbuf);
 	ret = simple_read_from_buffer(buf, size, ppos, kbuf, strlen(kbuf));
 	kfree(kbuf);
+
+out:
+	return ret;
+}
+
+static int rbac_bind_op(int wr, char **args)
+{
+	char *tokens[2], *name;
+	int id, ret = 0;
+
+	if (rbac_get_nargs(args, 2, tokens) != 2) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	id = simple_strtol(tokens[0], NULL, 10);
+	if (id < 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+	name = tokens[1];
+
+	switch (wr) {
+	case 0:
+		ret = rbac_bind_permission(id, name);
+		break;
+	case 1:
+		ret = rbac_unbind_permission(id, name);
+		break;
+	default:
+		ret = -EINVAL;
+		goto out;
+	}
 
 out:
 	return ret;
@@ -277,9 +289,19 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 		goto out;
 	}
 	switch (tokens[0][0]) {
+	case 'a':
+		if (!strcmp(tokens[0], "a") || !strcmp(tokens[0], "add")) {
+			wr = 0;
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
 	case 'b':
 		if (!strcmp(tokens[0], "b") || !strcmp(tokens[0], "bind")) {
-			
+			err = rbac_bind_op(0, &args);
+			if (err < 0)
+				ret = err;
 			goto out;
 		} else {
 			ret = -EINVAL;
@@ -287,8 +309,8 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 		}
 		break;
 	case 'r':
-		if (!strcmp(tokens[0], "r") || !strcmp(tokens[0], "role")) {
-			type = RBAC_ROLE;
+		if (!strcmp(tokens[0], "r") || !strcmp(tokens[0], "remove")) {
+			wr = 1;
 		} else if (!strcmp(tokens[0], "register")) {
 			// TODO: add register hanler
 			goto out;
@@ -297,9 +319,12 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 			goto out;
 		}
 		break;
-	case 'p':
-		if (!strcmp(tokens[0], "p") || !strcmp(tokens[0], "perm")) {
-			type = RBAC_PERM;
+	case 'u':
+		if (!strcmp(tokens[0], "u") || !strcmp(tokens[0], "unbind")) {
+			err = rbac_bind_op(1, &args);
+			if (err < 0)
+				ret = err;
+			goto out;
 		} else {
 			ret = -EINVAL;
 			goto out;
@@ -315,17 +340,17 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 		goto out;
 	}
 	switch (tokens[0][0]) {
-	case 'a':
-		if (!strcmp(tokens[0], "add") || !strcmp(tokens[0], "a")) {
-			wr = 0;
+	case 'p':
+		if (!strcmp(tokens[0], "p") || !strcmp(tokens[0], "perm")) {
+			type = RBAC_PERM;
 		} else {
 			ret = -EINVAL;
 			goto out;
 		}
 		break;
 	case 'r':
-		if (!strcmp(tokens[0], "remove") || !strcmp(tokens[0], "r")) {
-			wr = 1;
+		if (!strcmp(tokens[0], "r") || !strcmp(tokens[0], "role")) {
+			type = RBAC_ROLE;
 		} else {
 			ret = -EINVAL;
 			goto out;

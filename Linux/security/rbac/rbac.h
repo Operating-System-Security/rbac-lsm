@@ -21,35 +21,18 @@ typedef enum {
 
 typedef char* rbac_obj_t;
 
-struct rbac_user {
-	int			uid;
-	struct rbac_role	*role;
-};
-
-struct rbac_role {
-	char			name[ROLE_NAME_LEN];
-	struct rbac_permission	*perms[ROLE_MAX_PERMS];
-	refcount_t		ref;
-	struct list_head	entry;
-};
-
-struct rbac_permission {
-	int			id;
-	rbac_acc_t		acc;
-	rbac_op_t		op;
-	rbac_obj_t		obj;
-	refcount_t		ref;
-	struct list_head	entry;
-};
-
 extern struct list_head rbac_roles;
 extern struct list_head rbac_perms;
 extern int rbac_enable;
 
 extern int rbac_add_role(char *name);
 extern int rbac_remove_role(char *name);
+extern int rbac_get_roles_info(char *buf);
 extern int rbac_add_permission(rbac_acc_t acc, rbac_op_t op, rbac_obj_t obj);
 extern int rbac_remove_permission(int id);
+extern int rbac_get_perms_info(char *buf);
+extern int rbac_bind_permission(int id, char *name);
+extern int rbac_unbind_permission(int rid, char *name);
 
 extern int rbac_get_nargs(char **args, int len, char **tokens);
 

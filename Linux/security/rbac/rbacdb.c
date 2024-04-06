@@ -4,7 +4,6 @@
  *
  * Copyright 2024 Miao Hao <haomiao19@mails.ucas.ac.cn>
  */
-#include "linux/refcount.h"
 #include <asm-generic/errno-base.h>
 #include <linux/dcache.h>
 #include <linux/err.h>
@@ -18,6 +17,7 @@
 #include <linux/list.h>
 #include <linux/lsm_hooks.h>
 #include <linux/printk.h>
+#include <linux/refcount.h>
 #include <linux/security.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -26,8 +26,36 @@
 #include "rbac.h"
 
 static int next_perm_id = 0;
+struct rbac_user {
+	uid_t			uid;
+	struct rbac_role	*role;
+};
 
-struct rbac_role *get_role_by_name(char *name)
+struct rbac_role {
+	char			name[ROLE_NAME_LEN];
+	struct rbac_permission	*perms[ROLE_MAX_PERMS];
+	refcount_t		ref;
+	struct list_head	entry;
+};
+
+struct rbac_permission {
+	int			id;
+	rbac_acc_t		acc;
+	rbac_op_t		op;
+	rbac_obj_t		obj;
+	refcount_t		ref;
+	struct list_head	entry;
+};
+static const char *acceptability_name[] = {
+	[ACC_ACCEPT] = "accept",
+	[ACC_DENY] = "deny",
+};
+static const char *operation_name[] = {
+	[OP_READ] = "read",
+	[OP_WRITE] = "write",
+};
+
+static struct rbac_role *rbac_get_role_by_name(char *name)
 {
 	struct rbac_role *ret;
 	list_for_each_entry(ret, &rbac_roles, entry) {
@@ -38,7 +66,7 @@ struct rbac_role *get_role_by_name(char *name)
 	return NULL;
 }
 
-struct rbac_permission *get_perm_by_id(int id)
+static struct rbac_permission *rbac_get_perm_by_id(int id)
 {
 	struct rbac_permission *ret;
 
@@ -58,7 +86,7 @@ int rbac_add_role(char *name)
 	int ret = 0, i;
 
 	/* First check if role with name exists */
-	if (get_role_by_name(name) != NULL) {
+	if (rbac_get_role_by_name(name) != NULL) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -75,7 +103,7 @@ int rbac_add_role(char *name)
 	for (i = 0; i < ROLE_MAX_PERMS; i++) {
 		new_role->perms[i] = NULL;
 	}
-	refcount_set(&new_role->ref, 0);
+	refcount_set(&new_role->ref, 1);
 	/* we do not initialize perms[] field because we use kzalloc */
 	list_add_tail(&new_role->entry, &rbac_roles);
 
@@ -89,7 +117,11 @@ int rbac_remove_role(char *name)
 	int ret = 0;
 
 	/* First check if role with name exists */
-	if ((role = get_role_by_name(name)) == NULL) {
+	if ((role = rbac_get_role_by_name(name)) == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (refcount_read(&role->ref) != 1) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -102,6 +134,26 @@ int rbac_remove_role(char *name)
 
 out:
 	return ret;
+}
+
+int rbac_get_roles_info(char *buf)
+{
+	int off = 0, i;
+	struct rbac_role *role;
+
+	list_for_each_entry(role, &rbac_roles, entry) {
+		off += sprintf(buf + off, "%s", role->name);
+		for (i = 0; i < ROLE_MAX_PERMS; i++) {
+			if (role->perms[i] != NULL)
+				off += sprintf(buf + off, "\n\tperm[%d]", i);
+		}
+		if (i == ROLE_MAX_PERMS) {
+			off += sprintf(buf + off, " with no permission bind");
+		}
+		off += sprintf(buf + off, "\n");
+	}
+
+	return 0;
 }
 
 int rbac_add_permission(rbac_acc_t acc, rbac_op_t op, rbac_obj_t obj)
@@ -119,7 +171,7 @@ int rbac_add_permission(rbac_acc_t acc, rbac_op_t op, rbac_obj_t obj)
 	new_perm->acc = acc;
 	new_perm->op = op;
 	new_perm->obj = obj;
-	refcount_set(&new_perm->ref, 0);
+	refcount_set(&new_perm->ref, 1);
 
 	/* Finally add the new permission to the list */
 	list_add_tail(&new_perm->entry, &rbac_perms);
@@ -134,7 +186,11 @@ int rbac_remove_permission(int id)
 	struct rbac_permission *perm;
 
 	/* find the removing permission by id */
-	if ((perm = get_perm_by_id(id)) == NULL) {
+	if ((perm = rbac_get_perm_by_id(id)) == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (refcount_read(&perm->ref) != 1) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -142,6 +198,74 @@ int rbac_remove_permission(int id)
 	/* remove the selected permission from the list */
 	list_del(&perm->entry);
 	kfree(perm);
+
+out:
+	return ret;
+}
+
+int rbac_get_perms_info(char *buf)
+{
+	int off = 0;
+	struct rbac_permission *perm;
+
+	list_for_each_entry(perm, &rbac_perms, entry) {
+		off += sprintf(buf + off, "[%d]: %s %s on %s\n",
+			       perm->id, acceptability_name[perm->acc],
+			       operation_name[perm->op], perm->obj ?: "all");
+	}
+
+	return 0;
+}
+
+int rbac_bind_permission(int id, char *name)
+{
+	int ret = 0, i;
+	struct rbac_permission *perm;
+	struct rbac_role *role;
+
+	if ((perm = rbac_get_perm_by_id(id)) == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if ((role = rbac_get_role_by_name(name)) == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	for (i = 0; i < ROLE_MAX_PERMS; i++) {
+		if (role->perms[i] == NULL) {
+			role->perms[i] = perm;
+			refcount_inc(&perm->ref);
+			break;
+		}
+	}
+	if (i == ROLE_MAX_PERMS) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+out:
+	return ret;
+}
+
+int rbac_unbind_permission(int rid, char *name)
+{
+	int ret = 0;
+	struct rbac_permission *perm;
+	struct rbac_role *role;
+
+	if ((role = rbac_get_role_by_name(name)) == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+	
+	perm = role->perms[rid];
+	if (perm == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+	role->perms[rid] = NULL;
+	refcount_dec(&perm->ref);
 
 out:
 	return ret;
