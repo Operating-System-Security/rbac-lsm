@@ -110,7 +110,7 @@ uid: 1000
 ```sh
 # cat role
 admin
-	perm[0]
+	perm[0] id: 0
 guest
 ```
 
@@ -171,3 +171,82 @@ db 层实现了接口 `int rbac_check_access(uid_t uid, struct inode *inode, int
 - 通过 `uid` 查询用户信息，进一步获取当前用户的角色 `role`
 - 遍历 `role` 中包含的每一条权限，根据 `inode` 和 `mask` 找到客体和操作与本次访问相同的权限
 - 根据权限中的接受性接受/拒绝本次访问
+
+## 实验结果
+
+1. 获取 rbac-lsm 初始状态
+
+```sh
+# cat user && cat role && cat perm
+uid: 0 acts as role "admin"
+admin
+	perm[0] id: 0
+[0]: deny write on /init
+```
+
+> 此时包含一个用户，它将 `uid` 为 `0` 的用户（即 root）绑定到了角色 `admin` 上；`admin` 绑定了 `id` 为 `0` 的权限；该权限禁止写 `/init`
+
+2. 检查 rbac-lsm 是否工作
+
+```sh
+# cat enable
+rbac: enabled
+# cat /init
+#!/bin/sh
+mount -t devtmpfs none /dev
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t securityfs securityfs /sys/kernel/security
+exec 1> /dev/console 2> /dev/console < /dev/console
+exec /bin/busybox
+# echo "add a new line" > /init
+-sh: can't create /init: Operation not permitted
+```
+
+> 此时可以读 `/init` 但是无法写入内容
+
+3. 添加一条对 `/init` 读的禁止权限，并将原来 `admin` 中的权限替换为这条新的权限
+
+```sh
+# echo add perm d r /init > ctrl
+# echo unbind 0 admin > ctrl
+# echo bind 1 admin > ctrl
+# cat user && cat role && cat perm
+uid: 0 acts as role "admin"
+admin
+	perm[0] id: 1
+[0]: deny write on /init
+[1]: deny read on /init
+# cat /init
+cat: can't open '/init': Operation not permitted
+# echo "add a new line" >> /init
+# 
+```
+
+> `admin` 具有权限的 `id` 已经更新为了 `1`，此时无法读 `/init`，但是可以写 `/init`
+
+4. 将 `admin` 的权限再改为禁止写 `/init`
+
+```sh
+# echo unbind 0 admin > ctrl
+# echo bind 0 admin > ctrl
+# cat user && cat role && cat perm
+uid: 0 acts as role "admin"
+admin
+	perm[0] id: 0
+[0]: deny write on /init
+[1]: deny read on /init
+# cat /init
+#!/bin/sh
+mount -t devtmpfs none /dev
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t securityfs securityfs /sys/kernel/security
+exec 1> /dev/console 2> /dev/console < /dev/console
+exec /bin/busybox
+add a new line
+```
+
+> 此时又可以对 `/init` 进行读操作了，并且其中包含了刚刚写入的内容
+
+如果客体变为目录，则实验结果体现为能否读取该目录下包含的文件，或在该目录下创建文件，结果在此略过。

@@ -265,7 +265,9 @@ int rbac_get_roles_info(char *buf)
 		off += sprintf(buf + off, "%s", role->name);
 		for (i = 0; i < ROLE_MAX_PERMS; i++) {
 			if (role->perms[i] != NULL)
-				off += sprintf(buf + off, "\n\tperm[%d]", i);
+				off += sprintf(buf + off,
+					       "\n\tperm[%d] id: %d", i,
+					       role->perms[i]->id);
 		}
 		off += sprintf(buf + off, "\n");
 	}
