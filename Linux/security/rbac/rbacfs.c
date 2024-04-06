@@ -34,7 +34,7 @@ typedef enum {
 	RBAC_CTRL,
 	RBAC_FP_TYPE_NUM,
 } rbac_fp_type_t;
-typedef int (*rbac_ctrl_op_t)(int wr, char **args, char *delim);
+typedef int (*rbac_ctrl_op_t)(int wr, char **args);
 struct rbac_file {
 	struct dentry			*fp;
 	const struct file_operations	ops;
@@ -51,12 +51,14 @@ static const char *operation_name[] = {
 	[OP_WRITE] = "write",
 };
 
-static int rbac_role_op(int wr, char **args, char *delim)
+static int rbac_role_op(int wr, char **args)
 {
 	char *name;
 	int ret = 0;
 
-	name = strsep(args, delim);
+	if (rbac_get_nargs(args, 1, &name) != 1) {
+		return -EINVAL;
+	}
 	switch(wr) {
 	case 0:
 		ret = rbac_add_role(name);
@@ -70,22 +72,97 @@ static int rbac_role_op(int wr, char **args, char *delim)
 	return ret;
 }
 
-static int rbac_perm_op(int wr, char **args, char *delim)
+static int rbac_perm_op(int wr, char **args)
 {
-	char *idp;
-	int ret = 0;
+	char *tokens[3], *accp, *opp, *objp;
+	int ret = 0, id;
+	rbac_acc_t acc = -1;
+	rbac_op_t op = -1;
+	rbac_obj_t obj = NULL;
 
 	switch(wr) {
 	case 0:
-		ret = rbac_add_permission(args, delim);
+		/* First parse args */
+		if (rbac_get_nargs(args, 3, tokens) < 2) {
+			ret = -EINVAL;
+			goto out;
+		}
+		accp = tokens[0];
+		opp = tokens[1];
+		objp = tokens[2];
+
+		switch (accp[0]) {
+		case 'a':
+			if (strcmp(accp, "accept") && strcmp(accp, "a")) {
+				ret = -EINVAL;
+				goto out;
+			}
+			acc = ACC_ACCEPT;
+			break;
+		case 'd':
+			if (strcmp(accp, "deny") && strcmp(accp, "d")) {
+				ret = -EINVAL;
+				goto out;
+			}
+			acc = ACC_DENY;
+			break;
+		default:
+			ret = -EINVAL;
+			goto out;
+		}
+
+		switch (opp[0]) {
+		case 'r':
+			if (strcmp(opp, "read") && strcmp(opp, "r")) {
+				ret = -EINVAL;
+				goto out;
+			}
+			op = OP_READ;
+			break;
+		case 'w':
+			if (strcmp(opp, "write") && strcmp(opp, "w")) {
+				ret = -EINVAL;
+				goto out;
+			}
+			op = OP_WRITE;
+			break;
+		default:
+			ret = -EINVAL;
+			goto out;
+		}
+
+		/* we accept no obj path input, it means "for all objects" */
+		if (objp == NULL || strlen(objp) == 0)
+			obj = NULL;
+		else {
+			obj = kzalloc(strlen(objp) + 1, GFP_KERNEL);
+			if (obj == NULL) {
+				ret = -ENOMEM;
+				goto out;
+			}
+			strcpy(obj, objp);
+		}
+		ret = rbac_add_permission(acc, op, obj);
 		break;
 	case 1:
-		idp = strsep(args, delim);
-		ret = rbac_remove_permission(idp, delim);
+		if (rbac_get_nargs(args, 1, tokens) != 1) {
+			ret = -EINVAL;
+			goto out;
+		}
+		/* translate id string to an integer */
+		id = simple_strtol(tokens[0], NULL, 10);
+		if (id < 0) {
+			ret = -EINVAL;
+			goto out;
+		}
+		ret = rbac_remove_permission(id);
 		break;
 	default:
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out;
 	}
+
+out:
 	return ret;
 }
 
@@ -184,8 +261,8 @@ out:
 static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 			       size_t size, loff_t * ppos)
 {
-	char kbuf[40], delim[] = " \n";
-	char *kbufp, *token;
+	char kbuf[40];
+	char *args, *tokens[10];
 	int ret, wr = -1, err;
 	rbac_fp_type_t type = -1;
 
@@ -194,15 +271,26 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 		goto out;
 
 	/* First we pares the object of the ctrl operation */
-	kbufp = kbuf;
-	token = strsep(&kbufp, delim);
-	switch (token[0]) {
+	args = kbuf;
+	if (rbac_get_nargs(&args, 1, tokens) != 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	switch (tokens[0][0]) {
+	case 'b':
+		if (!strcmp(tokens[0], "b") || !strcmp(tokens[0], "bind")) {
+			
+			goto out;
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
 	case 'r':
-		if (!strcmp(token, "r") || !strcmp(token, "role")) {
+		if (!strcmp(tokens[0], "r") || !strcmp(tokens[0], "role")) {
 			type = RBAC_ROLE;
-		} else if (!strcmp(token, "register")) {
+		} else if (!strcmp(tokens[0], "register")) {
 			// TODO: add register hanler
-			ret = 0;
 			goto out;
 		} else {
 			ret = -EINVAL;
@@ -210,7 +298,7 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 		}
 		break;
 	case 'p':
-		if (!strcmp(token, "p") || !strcmp(token, "perm")) {
+		if (!strcmp(tokens[0], "p") || !strcmp(tokens[0], "perm")) {
 			type = RBAC_PERM;
 		} else {
 			ret = -EINVAL;
@@ -222,10 +310,13 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 		goto out;
 	}
 
-	token = strsep(&kbufp, delim);
-	switch (token[0]) {
+	if (rbac_get_nargs(&args, 1, tokens) != 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	switch (tokens[0][0]) {
 	case 'a':
-		if (!strcmp(token, "add") || !strcmp(token, "a")) {
+		if (!strcmp(tokens[0], "add") || !strcmp(tokens[0], "a")) {
 			wr = 0;
 		} else {
 			ret = -EINVAL;
@@ -233,7 +324,7 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 		}
 		break;
 	case 'r':
-		if (!strcmp(token, "remove") || !strcmp(token, "r")) {
+		if (!strcmp(tokens[0], "remove") || !strcmp(tokens[0], "r")) {
 			wr = 1;
 		} else {
 			ret = -EINVAL;
@@ -246,7 +337,7 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 	}
 
 	if(rbac_ctrl_ops[type] != NULL) {
-		err = rbac_ctrl_ops[type](wr, &kbufp, delim);
+		err = rbac_ctrl_ops[type](wr, &args);
 		if (err < 0)
 			ret = err;
 	}

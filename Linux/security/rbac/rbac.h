@@ -48,7 +48,9 @@ extern int rbac_enable;
 
 extern int rbac_add_role(char *name);
 extern int rbac_remove_role(char *name);
-extern int rbac_add_permission(char **args, char *delim);
-extern int rbac_remove_permission(char *idp, char *delim);
+extern int rbac_add_permission(rbac_acc_t acc, rbac_op_t op, rbac_obj_t obj);
+extern int rbac_remove_permission(int id);
+
+extern int rbac_get_nargs(char **args, int len, char **tokens);
 
 #endif

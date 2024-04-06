@@ -4,6 +4,7 @@
  *
  * Copyright 2024 Miao Hao <haomiao19@mails.ucas.ac.cn>
  */
+#include "linux/refcount.h"
 #include <asm-generic/errno-base.h>
 #include <linux/dcache.h>
 #include <linux/err.h>
@@ -54,7 +55,7 @@ struct rbac_permission *get_perm_by_id(int id)
 int rbac_add_role(char *name)
 {
 	struct rbac_role *new_role;
-	int ret = 0;
+	int ret = 0, i;
 
 	/* First check if role with name exists */
 	if (get_role_by_name(name) != NULL) {
@@ -71,6 +72,10 @@ int rbac_add_role(char *name)
 
 	/* Finally initialize the new role */
 	strcpy(new_role->name, name);
+	for (i = 0; i < ROLE_MAX_PERMS; i++) {
+		new_role->perms[i] = NULL;
+	}
+	refcount_set(&new_role->ref, 0);
 	/* we do not initialize perms[] field because we use kzalloc */
 	list_add_tail(&new_role->entry, &rbac_roles);
 
@@ -99,70 +104,10 @@ out:
 	return ret;
 }
 
-int rbac_add_permission(char **args, char *delim)
+int rbac_add_permission(rbac_acc_t acc, rbac_op_t op, rbac_obj_t obj)
 {
 	int ret = 0;
-	char *accp, *opp, *objp;
-	rbac_acc_t acc = -1;
-	rbac_op_t op = -1;
-	rbac_obj_t obj = NULL;
 	struct rbac_permission *new_perm;
-
-	/* First parse arguments */
-	accp = strsep(args, delim);
-	switch (accp[0]) {
-	case 'a':
-		if (strcmp(accp, "accept") && strcmp(accp, "a")) {
-			ret = -EINVAL;
-			goto out;
-		}
-		acc = ACC_ACCEPT;
-		break;
-	case 'd':
-		if (strcmp(accp, "deny") && strcmp(accp, "d")) {
-			ret = -EINVAL;
-			goto out;
-		}
-		acc = ACC_DENY;
-		break;
-	default:
-		ret = -EINVAL;
-		goto out;
-	}
-
-	opp = strsep(args, delim);
-	switch (opp[0]) {
-	case 'r':
-		if (strcmp(opp, "read") && strcmp(opp, "r")) {
-			ret = -EINVAL;
-			goto out;
-		}
-		op = OP_READ;
-		break;
-	case 'w':
-		if (strcmp(opp, "write") && strcmp(opp, "w")) {
-			ret = -EINVAL;
-			goto out;
-		}
-		op = OP_WRITE;
-		break;
-	default:
-		ret = -EINVAL;
-		goto out;
-	}
-
-	/* we accept no obj path input, it means "for all objects" */
-	objp = strsep(args, delim);
-	if (strlen(objp) == 0)
-		obj = NULL;
-	else {
-		obj = kzalloc(strlen(objp) + 1, GFP_KERNEL);
-		if (obj == NULL) {
-			ret = -ENOMEM;
-			goto out;
-		}
-		strcpy(obj, objp);
-	}
 
 	/* Then allocate new permission and initialize it */
 	new_perm = kzalloc(sizeof(struct rbac_permission), GFP_KERNEL);
@@ -174,30 +119,19 @@ int rbac_add_permission(char **args, char *delim)
 	new_perm->acc = acc;
 	new_perm->op = op;
 	new_perm->obj = obj;
+	refcount_set(&new_perm->ref, 0);
 
-	/* add the new permission to the list */
+	/* Finally add the new permission to the list */
 	list_add_tail(&new_perm->entry, &rbac_perms);
 
 out:
 	return ret;
 }
 
-int rbac_remove_permission(char *idp, char *delim)
+int rbac_remove_permission(int id)
 {
-	int ret = 0, id;
+	int ret = 0;
 	struct rbac_permission *perm;
-
-	if (strlen(idp) == 0) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	/* translate id string to an integer */
-	id = simple_strtol(idp, NULL, 10);
-	if (id < 0) {
-		ret = -EINVAL;
-		goto out;
-	}
 
 	/* find the removing permission by id */
 	if ((perm = get_perm_by_id(id)) == NULL) {
