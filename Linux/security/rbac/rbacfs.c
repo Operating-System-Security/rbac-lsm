@@ -24,11 +24,13 @@
 #include <linux/uaccess.h>
 #include "rbac.h"
 
+LIST_HEAD(rbac_users);
 LIST_HEAD(rbac_roles);
 LIST_HEAD(rbac_perms);
 
 typedef enum {
 	RBAC_ENABLE,
+	RBAC_USER,
 	RBAC_ROLE,
 	RBAC_PERM,
 	RBAC_CTRL,
@@ -42,6 +44,34 @@ struct rbac_file {
 	const umode_t			mode;
 };
 static struct dentry *rbac_dir = NULL;
+
+static int rbac_user_op(int wr, char **args)
+{
+	char *uidp;
+	uid_t uid;
+	int ret = 0;
+
+	if (rbac_get_nargs(args, 1, &uidp) != 1) {
+		return -EINVAL;
+	}
+	/* translate id string to an integer */
+	uid = simple_strtol(uidp, NULL, 10);
+	if (uid < 0) {
+		return -EINVAL;
+	}
+
+	switch(wr) {
+	case 0:
+		ret = rbac_add_user(uid);
+		break;
+	case 1:
+		ret = rbac_remove_user(uid);
+		break;
+	default:
+		return -EINVAL;
+	}
+	return ret;
+}
 
 static int rbac_role_op(int wr, char **args)
 {
@@ -158,7 +188,76 @@ out:
 	return ret;
 }
 
+static int rbac_bind_op(int wr, char **args)
+{
+	char *tokens[2], *name;
+	int id, ret = 0;
+
+	if (rbac_get_nargs(args, 2, tokens) != 2) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	id = simple_strtol(tokens[0], NULL, 10);
+	if (id < 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+	name = tokens[1];
+
+	switch (wr) {
+	case 0:
+		ret = rbac_bind_permission(id, name);
+		break;
+	case 1:
+		ret = rbac_unbind_permission(id, name);
+		break;
+	default:
+		ret = -EINVAL;
+		goto out;
+	}
+
+out:
+	return ret;
+}
+
+static int rbac_register_op(int wr, char **args)
+{
+	char *tokens[2], *name;
+	int ret = 0, num_args;
+	uid_t uid;
+
+	num_args = rbac_get_nargs(args, 2, tokens);
+	if ((num_args != 2 && wr == 0) || (num_args != 1 && wr == 1)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	uid = simple_strtol(tokens[0], NULL, 10);
+	if (uid < 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+	name = tokens[1];
+
+	switch (wr) {
+	case 0:
+		ret = rbac_register_user(uid, name);
+		break;
+	case 1:
+		ret = rbac_unregister_user(uid);
+		break;
+	default:
+		ret = -EINVAL;
+		goto out;
+	}
+
+out:
+	return ret;
+}
+
 static const rbac_ctrl_op_t rbac_ctrl_ops[] = {
+	[RBAC_USER] = rbac_user_op,
 	[RBAC_ROLE] = rbac_role_op,
 	[RBAC_PERM] = rbac_perm_op,
 };
@@ -192,6 +291,26 @@ static ssize_t rbac_enable_write(struct file *file, const char __user *buf,
 	default:
 		ret = -EINVAL;
 	}
+
+out:
+	return ret;
+}
+
+static ssize_t rbac_user_read(struct file *file, char __user *buf,
+			      size_t size, loff_t *ppos)
+{
+	char* kbuf;
+	int ret = 0;
+
+	kbuf = kzalloc(1024, GFP_KERNEL);
+	if (kbuf == NULL) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	rbac_get_users_info(kbuf);
+	ret = simple_read_from_buffer(buf, size, ppos, kbuf, strlen(kbuf));
+	kfree(kbuf);
 
 out:
 	return ret;
@@ -232,39 +351,6 @@ static ssize_t rbac_perm_read(struct file *file, char __user *buf,
 	rbac_get_perms_info(kbuf);
 	ret = simple_read_from_buffer(buf, size, ppos, kbuf, strlen(kbuf));
 	kfree(kbuf);
-
-out:
-	return ret;
-}
-
-static int rbac_bind_op(int wr, char **args)
-{
-	char *tokens[2], *name;
-	int id, ret = 0;
-
-	if (rbac_get_nargs(args, 2, tokens) != 2) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	id = simple_strtol(tokens[0], NULL, 10);
-	if (id < 0) {
-		ret = -EINVAL;
-		goto out;
-	}
-	name = tokens[1];
-
-	switch (wr) {
-	case 0:
-		ret = rbac_bind_permission(id, name);
-		break;
-	case 1:
-		ret = rbac_unbind_permission(id, name);
-		break;
-	default:
-		ret = -EINVAL;
-		goto out;
-	}
 
 out:
 	return ret;
@@ -312,7 +398,9 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 		if (!strcmp(tokens[0], "r") || !strcmp(tokens[0], "remove")) {
 			wr = 1;
 		} else if (!strcmp(tokens[0], "register")) {
-			// TODO: add register hanler
+			err = rbac_register_op(0, &args);
+			if (err < 0)
+				ret = err;
 			goto out;
 		} else {
 			ret = -EINVAL;
@@ -322,6 +410,11 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 	case 'u':
 		if (!strcmp(tokens[0], "u") || !strcmp(tokens[0], "unbind")) {
 			err = rbac_bind_op(1, &args);
+			if (err < 0)
+				ret = err;
+			goto out;
+		} else if (!strcmp(tokens[0], "unregister")) {
+			err = rbac_register_op(1, &args);
 			if (err < 0)
 				ret = err;
 			goto out;
@@ -351,6 +444,14 @@ static ssize_t rbac_ctrl_write(struct file *file, const char __user *buf,
 	case 'r':
 		if (!strcmp(tokens[0], "r") || !strcmp(tokens[0], "role")) {
 			type = RBAC_ROLE;
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
+	case 'u':
+		if (!strcmp(tokens[0], "u") || !strcmp(tokens[0], "user")) {
+			type = RBAC_USER;
 		} else {
 			ret = -EINVAL;
 			goto out;
@@ -399,12 +500,11 @@ out:
 
 static struct rbac_file rbac_files[] = {
 	INIT_RBAC_RDWR_FILE(enable, RBAC_ENABLE),
+	INIT_RBAC_RDON_FILE(user, RBAC_USER),
 	INIT_RBAC_RDON_FILE(role, RBAC_ROLE),
 	INIT_RBAC_RDON_FILE(perm, RBAC_PERM),
 	INIT_RBAC_WRON_FILE(ctrl, RBAC_CTRL),
 };
-
-#undef INIT_RBAC_FILE
 
 static int __init rbac_fs_init(void)
 {

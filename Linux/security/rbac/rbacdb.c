@@ -29,6 +29,7 @@ static int next_perm_id = 0;
 struct rbac_user {
 	uid_t			uid;
 	struct rbac_role	*role;
+	struct list_head	entry;
 };
 
 struct rbac_role {
@@ -55,6 +56,17 @@ static const char *operation_name[] = {
 	[OP_WRITE] = "write",
 };
 
+static struct rbac_user *rbac_get_user_by_uid (uid_t uid)
+{
+	struct rbac_user *ret;
+	list_for_each_entry(ret, &rbac_users, entry) {
+		if (ret->uid == uid)
+			return ret;
+	}
+
+	return NULL;
+}
+
 static struct rbac_role *rbac_get_role_by_name(char *name)
 {
 	struct rbac_role *ret;
@@ -80,10 +92,77 @@ static struct rbac_permission *rbac_get_perm_by_id(int id)
 	return NULL;
 }
 
+int rbac_add_user(uid_t uid)
+{
+	struct rbac_user *new_user;
+	int ret = 0;
+
+	/* First check if user with name exists */
+	if (rbac_get_user_by_uid(uid) != NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* Second alloc memory space for the new user */
+	new_user = kzalloc(sizeof(struct rbac_user), GFP_KERNEL);
+	if (new_user == NULL) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	/* Finally initialize the new user */
+	new_user->uid = uid;
+	/* we do not initialize role field because we use kzalloc */
+	list_add_tail(&new_user->entry, &rbac_users);
+
+out:
+	return ret;
+}
+
+int rbac_remove_user(uid_t uid)
+{
+	struct rbac_user *user;
+	int ret = 0;
+
+	/* First check if user with name exists */
+	if ((user = rbac_get_user_by_uid(uid)) == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* Second remove the selected role from the list */
+	if (user->role != NULL) {
+		refcount_dec(&user->role->ref);
+	}
+	list_del(&user->entry);
+
+	/* Finally free memory space of the removed role */
+	kfree(user);
+
+out:
+	return ret;
+}
+
+int rbac_get_users_info(char *buf)
+{
+	int off = 0;
+	struct rbac_user *user;
+
+	list_for_each_entry(user, &rbac_users, entry) {
+		off += sprintf(buf + off, "uid: %d", user->uid);
+		if (user->role != NULL) {
+			off += sprintf(buf + off, " acts as role \"%s\"", user->role->name);
+		}
+		off += sprintf(buf + off, "\n");
+	}
+
+	return 0;
+}
+
 int rbac_add_role(char *name)
 {
 	struct rbac_role *new_role;
-	int ret = 0, i;
+	int ret = 0;
 
 	/* First check if role with name exists */
 	if (rbac_get_role_by_name(name) != NULL) {
@@ -100,9 +179,6 @@ int rbac_add_role(char *name)
 
 	/* Finally initialize the new role */
 	strcpy(new_role->name, name);
-	for (i = 0; i < ROLE_MAX_PERMS; i++) {
-		new_role->perms[i] = NULL;
-	}
 	refcount_set(&new_role->ref, 1);
 	/* we do not initialize perms[] field because we use kzalloc */
 	list_add_tail(&new_role->entry, &rbac_roles);
@@ -146,9 +222,6 @@ int rbac_get_roles_info(char *buf)
 		for (i = 0; i < ROLE_MAX_PERMS; i++) {
 			if (role->perms[i] != NULL)
 				off += sprintf(buf + off, "\n\tperm[%d]", i);
-		}
-		if (i == ROLE_MAX_PERMS) {
-			off += sprintf(buf + off, " with no permission bind");
 		}
 		off += sprintf(buf + off, "\n");
 	}
@@ -266,6 +339,56 @@ int rbac_unbind_permission(int rid, char *name)
 	}
 	role->perms[rid] = NULL;
 	refcount_dec(&perm->ref);
+
+out:
+	return ret;
+}
+
+int rbac_register_user(uid_t uid, char *name)
+{
+	int ret = 0;
+	struct rbac_user *user;
+	struct rbac_role *role;
+
+	if ((user = rbac_get_user_by_uid(uid)) == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if ((role = rbac_get_role_by_name(name)) == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (user->role != NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	user->role = role;
+	refcount_inc(&role->ref);
+
+out:
+	return ret;
+}
+
+int rbac_unregister_user(uid_t uid)
+{
+	int ret = 0;
+	struct rbac_user *user;
+	struct rbac_role *role;
+
+	if ((user = rbac_get_user_by_uid(uid)) == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+	
+	role = user->role;
+	if (user == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
+	user->role = NULL;
+	refcount_dec(&role->ref);
 
 out:
 	return ret;
