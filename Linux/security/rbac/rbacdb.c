@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * A Role Based Accessment Control LSM
+ * A Role Based Access Control LSM
  *
  * Copyright 2024 Miao Hao <haomiao19@mails.ucas.ac.cn>
  */
@@ -91,6 +91,49 @@ static struct rbac_permission *rbac_get_perm_by_id(int id)
 	}
 
 	return NULL;
+}
+
+int rbac_check_access(uid_t uid, struct inode *inode, int mask)
+{
+	int ret = 0, i;
+	struct rbac_user *user;
+	struct rbac_role *role;
+	struct rbac_permission *perm = NULL;
+
+	/* user dose not exist */
+	if ((user = rbac_get_user_by_uid(uid)) == NULL) {
+		ret = 0;
+		goto out;
+	}
+
+	/* user is not registered */
+	if (user->role == NULL) {
+		ret = 0;
+		goto out;
+	}
+	role = user->role;
+
+	for (i = 0; i < ROLE_MAX_PERMS; i++) {
+		perm = role->perms[i];
+		if (perm != NULL && perm->obj == inode) {
+			if (mask & MAY_READ &&
+			    perm->acc == ACC_DENY &&
+			    perm->op == OP_READ) {
+				ret = -EPERM;
+				goto out;
+			}
+			
+			if (mask & MAY_WRITE &&
+			    perm->acc == ACC_DENY &&
+			    perm->op == OP_WRITE) {
+				ret = -EPERM;
+				goto out;
+			}
+		}
+	}
+
+out:
+	return ret;
 }
 
 int rbac_add_user(uid_t uid)

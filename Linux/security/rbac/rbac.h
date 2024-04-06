@@ -27,6 +27,8 @@ extern struct list_head rbac_roles;
 extern struct list_head rbac_perms;
 extern int rbac_enable;
 
+extern int rbac_check_access(uid_t uid, struct inode *inode, int mask);
+
 extern int rbac_add_user(uid_t uid);
 extern int rbac_remove_user(uid_t uid);
 extern int rbac_get_users_info(char *buf);

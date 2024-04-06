@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * A Role Based Accessment Control LSM
+ * A Role Based Access Control LSM
  *
  * Copyright 2024 Miao Hao <haomiao19@mails.ucas.ac.cn>
  */
